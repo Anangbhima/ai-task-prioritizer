@@ -35,16 +35,28 @@ def extract_features(task: Dict, current_time: datetime) -> List[float]:
         1 if task.get('status', '').lower() == 'overdue' else 0  # Status_Overdue
     ]
 
+# Add this after extract_features() but before validate_features()
+def validate_task_features(func):
+    """Decorator to enforce 5 feature requirement"""
+    def wrapper(task: Dict, current_time: datetime):
+        features = extract_features(task, current_time)
+        if len(features) != 5:
+            raise ValueError(f"Expected 5 features, got {len(features)}")
+        return func(task, current_time)
+    return wrapper
+
+
+
+
 def validate_features(features: List[float]) -> bool:
     """Ensure feature structure matches training data"""
     return len(features) == 5 and all(isinstance(x, (int, float)) for x in features)
 
+@validate_task_features
 def predict_task_priority(task: Dict, current_time: datetime) -> float:
-    """Predict priority with feature validation"""
+    """Returns probability score between 0-1 for high priority"""
     features = extract_features(task, current_time)
-    if not validate_features(features):
-        raise ValueError(f"Feature mismatch. Expected 5 features, got {len(features)}")
-    return model.predict([features])[0]
+    return model.predict_proba([features])[0][1] 
 
 def dependencies_met(task: Dict, completed_task_ids: List[int]) -> bool:
     """Simplified dependency check matching dataset structure"""
