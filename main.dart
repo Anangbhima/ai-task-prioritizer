@@ -2,129 +2,347 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
+
+void main() {
+  runApp(TaskPrioritizerApp());
+}
 
 // Task Model
 class Task {
   String name;
   String urgency;
   String deadline;
-  List<int> dependencies;
-  
+  bool isComplete;
+  double? score;
+
   Task({
-    required this.name, 
-    required this.urgency, 
+    required this.name,
+    required this.urgency,
     required this.deadline,
-    this.dependencies = const [],
+    this.isComplete = false,
+    this.score,
   });
 
   Map<String, dynamic> toJson() {
-    // Convert string urgency to numeric score for API compatibility
-    int urgencyScore = urgency == 'High' ? 3 : (urgency == 'Medium' ? 2 : 1);
-    double normalizedUrgency = urgencyScore / 3.0; // Normalize between 0-1
-    
+    int urgencyScore = _urgencyToScore(urgency);
+    double normalizedUrgency = urgencyScore / 3.0;
+
     return {
-      'id': DateTime.now().millisecondsSinceEpoch % 10000, // Simple unique ID
+      'id': DateTime.now().millisecondsSinceEpoch % 10000,
       'name': name,
       'deadline': deadline,
       'urgency_score': urgencyScore,
-      'status': 'Pending',
+      'status': isComplete ? 'Complete' : 'Pending',
       'normalized_urgency': normalizedUrgency,
-      'dependencies': dependencies,
+      'dependencies': [],
     };
+  }
+
+  static int _urgencyToScore(String urgency) {
+    switch (urgency) {
+      case 'High':
+        return 3;
+      case 'Medium':
+        return 2;
+      case 'Low':
+        return 1;
+      default:
+        return 1;
+    }
   }
 }
 
-void main() {
-  runApp(TaskPrioritizerApp());
-}
-
 class TaskPrioritizerApp extends StatefulWidget {
-  const TaskPrioritizerApp({super.key});
-
   @override
   TaskPrioritizerAppState createState() => TaskPrioritizerAppState();
 }
 
-// Rest of the code remains the same until prioritizeTasks method
+class TaskPrioritizerAppState extends State<TaskPrioritizerApp> {
+  bool _isDarkMode = false;
 
-Future<List<dynamic>> prioritizeTasks(List<Task> tasks) async {
-  try {
-    final response = await http.post(
-      Uri.parse('http://10.0.2.2:5000/prioritize_tasks'), // Updated endpoint
-      headers: {'Content-Type': 'application/json'},
-      body: json.encode({
-        'tasks': tasks.map((task) => task.toJson()).toList(),
-        'completed_task_ids': [],
-      }),
+  @override
+  void initState() {
+    super.initState();
+    _loadTheme();
+  }
+
+  void _loadTheme() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() => _isDarkMode = prefs.getBool('isDarkMode') ?? false);
+  }
+
+  void _toggleTheme() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    setState(() => _isDarkMode = !_isDarkMode);
+    prefs.setBool('isDarkMode', _isDarkMode);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'AI Task Prioritizer',
+      debugShowCheckedModeBanner: false,
+      theme: _isDarkMode
+          ? ThemeData.dark().copyWith(
+              primaryColor: Colors.teal,
+              cardColor: Colors.grey[900],
+            )
+          : ThemeData(
+              primarySwatch: Colors.teal,
+              scaffoldBackgroundColor: Colors.teal.shade50,
+            ),
+      home: TaskListPage(
+        isDarkMode: _isDarkMode,
+        onToggleTheme: _toggleTheme,
+      ),
     );
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-      return data['prioritized_tasks'];
-    } else {
-      final error = json.decode(response.body);
-      throw Exception('API Error: ${error['error'] ?? 'Unknown error'}');
-    }
-  } catch (e) {
-    throw Exception('Connection failed: $e');
   }
 }
 
-// TestAPIPage updates
-class TestAPIPageState extends State<TestAPIPage> {
-  String responseText = "Click the button to send sample tasks to Flask backend";
-  bool isLoading = false;
+class TaskListPage extends StatefulWidget {
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
 
-  Future<void> sendTasksToFlask() async {
-    setState(() => isLoading = true);
-    
-    // Updated test data that matches API expectations
-    final tasks = {
-      "tasks": [
-        {
-          "id": 1,
-          "name": "Study for Math test",
-          "deadline": "2025-05-30",
-          "urgency_score": 3,
-          "dependencies": [],
-          "status": "Pending",
-          "normalized_urgency": 0.7
-        },
-        {
-          "id": 2,
-          "name": "Watch Netflix",
-          "deadline": "2025-06-15",
-          "urgency_score": 1,
-          "dependencies": [],
-          "status": "Pending",
-          "normalized_urgency": 0.2
-        }
-      ],
-      "completed_task_ids": []
-    };
+  TaskListPage({required this.isDarkMode, required this.onToggleTheme});
 
+  @override
+  TaskListPageState createState() => TaskListPageState();
+}
+
+class TaskListPageState extends State<TaskListPage> {
+  List<Task> tasks = [];
+  final String _apiUrl = "http://10.0.2.2:5000/prioritize_tasks"; // Update with your Flask backend URL
+
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  String _selectedUrgency = 'Medium';
+  DateTime _selectedDeadline = DateTime.now().add(Duration(days: 7));
+
+  Future<void> _prioritizeTasks() async {
     try {
+      final apiTasks = tasks.map((task) {
+        return {
+          "id": DateTime.now().millisecondsSinceEpoch % 10000,
+          "name": task.name,
+          "deadline": DateFormat('yyyy-MM-dd')
+              .format(DateFormat('MMM dd, yyyy').parse(task.deadline)),
+          "urgency_score": _urgencyToScore(task.urgency),
+          "dependencies": [],
+          "status": task.isComplete ? 'Complete' : 'Pending',
+          "normalized_urgency": _urgencyToScore(task.urgency) / 3.0,
+        };
+      }).toList();
+
       final response = await http.post(
-        Uri.parse('http://10.0.2.2:5000/prioritize_tasks'), // Updated endpoint
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(tasks),
+        Uri.parse(_apiUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'tasks': apiTasks, 'completed_task_ids': []}),
       );
 
-      setState(() {
-        isLoading = false;
-        if (response.statusCode == 200) {
-          responseText = "Success! API response:\n\n${json.encode(json.decode(response.body))}";
-        } else {
-          responseText = "Failed (${response.statusCode}):\n${response.body}";
-        }
-      });
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final prioritized = List<Map<String, dynamic>>.from(data['prioritized_tasks']);
+
+        setState(() {
+          tasks = prioritized.map((t) {
+            return Task(
+              name: t['name'] ?? 'Unnamed Task',
+              urgency: _scoreToUrgency(t['urgency_score']),
+              deadline: DateFormat('MMM dd, yyyy')
+                  .format(DateFormat('yyyy-MM-dd').parse(t['deadline'])),
+              score: t['score']?.toDouble(),
+              isComplete: t['status'] == 'Complete',
+            );
+          }).toList();
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('API Error: ${response.body}')),
+        );
+      }
     } catch (e) {
-      setState(() {
-        isLoading = false;
-        responseText = "Connection Error: $e";
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connection failed: $e')),
+      );
     }
   }
-}
+
+  int _urgencyToScore(String urgency) {
+    switch (urgency) {
+      case 'High':
+        return 3;
+      case 'Medium':
+        return 2;
+      case 'Low':
+        return 1;
+      default:
+        return 1;
+    }
+  }
+
+  String _scoreToUrgency(int score) {
+    if (score >= 3) return 'High';
+    if (score >= 2) return 'Medium';
+    return 'Low';
+  }
+
+  Color _getPriorityColor(double score) {
+    if (score > 0.7) return Colors.red;
+    if (score > 0.4) return Colors.orange;
+    return Colors.green;
+  }
+
+  void _addTask() {
+    if (_formKey.currentState!.validate()) {
+      setState(() {
+        tasks.add(Task(
+          name: _nameController.text,
+          urgency: _selectedUrgency,
+          deadline: DateFormat('MMM dd, yyyy').format(_selectedDeadline),
+        ));
+        _nameController.clear();
+        _selectedUrgency = 'Medium';
+        _selectedDeadline = DateTime.now().add(Duration(days: 7));
+      });
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _selectDeadline(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDeadline,
+      firstDate: DateTime.now(),
+      lastDate: DateTime(2101),
+    );
+    if (picked != null && picked != _selectedDeadline)
+      setState(() {
+        _selectedDeadline = picked;
+      });
+  }
+
+  void _showAddTaskDialog() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Add New Task'),
+          content: Form(
+            key: _formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _nameController,
+                    decoration: InputDecoration(labelText: 'Task Name'),
+                    validator: (value) {
+                      if (value == null || value.isEmpty) {
+                        return 'Please enter task name';
+                      }
+                      return null;
+                    },
+                  ),
+                  DropdownButtonFormField<String>(
+                    value: _selectedUrgency,
+                    items: ['High', 'Medium', 'Low']
+                        .map((label) => DropdownMenuItem(
+                              child: Text(label),
+                              value: label,
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedUrgency = value!;
+                      });
+                    },
+                    decoration: InputDecoration(labelText: 'Urgency'),
+                  ),
+                  SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Text('Deadline: ${DateFormat('MMM dd, yyyy').format(_selectedDeadline)}'),
+                      IconButton(
+                        icon: Icon(Icons.calendar_today),
+                        onPressed: () => _selectDeadline(context),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: Text('Add'),
+              onPressed: _addTask,
+            ),
+            TextButton(
+              child: Text('Cancel'),
+              onPressed: () {
+                _nameController.clear();
+                _selectedUrgency = 'Medium';
+                _selectedDeadline = DateTime.now().add(Duration(days: 7));
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _toggleTaskCompletion(int index) {
+    setState(() {
+      tasks[index].isComplete = !tasks[index].isComplete;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('AI Task Prioritizer'),
+        actions: [
+          IconButton(
+            icon: Icon(widget.isDarkMode ? Icons.wb_sunny : Icons.nightlight_round),
+            onPressed: widget.onToggleTheme,
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _prioritizeTasks,
+        icon: Icon(Icons.auto_awesome),
+        label: Text('AI Prioritize'),
+        backgroundColor: Colors.teal,
+      ),
+      body: tasks.isEmpty
+          ? Center(child: Text('No tasks added yet.'))
+          : ListView.builder(
+              itemCount: tasks.length,
+              itemBuilder: (context, index) {
+                final task = tasks[index];
+                return Card(
+                  child: ListTile(
+                    title: Text(task.name),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('📅 ${task.deadline}'),
+                        Text('Urgency: ${task.urgency}'),
+                        if (task.score != null)
+                          Text('⚡ Priority Score: ${task.score!.toStringAsFixed(2)}'),
+                      ],
+                    ),
+                    trailing: IconButton(
+                      icon: Icon(
+                        task.isComplete ? Icons.check_box : Icons.check_box_outline_blank,
+                        color: task.score != null
+                            ? _getPriorityColor(task.score!)
+                            : Colors.grey,
+                      ),
+                      onPressed: ()
+::contentReference[oaicite:0]{index=0}
+ 
 
 
