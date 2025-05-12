@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import joblib
@@ -11,61 +10,52 @@ CORS(app)
 # Load model and required features
 try:
     model = joblib.load('task_priority_model.pkl')
-    features = joblib.load('model_features.pkl')  # Saved during training
+    features = joblib.load('model_features.pkl')  # List of feature names in order
     model_loaded = True
 except FileNotFoundError:
     model_loaded = False
     model = None
     features = []
 
-# Core functions aligned with dataset
+# --- Feature extraction ---
 def extract_features(task: Dict, current_time: datetime) -> List[float]:
-    """Extract features matching the trained model's requirements"""
     try:
         deadline = datetime.strptime(task['deadline'], "%Y-%m-%d")
         days_left = (deadline - current_time).days
     except (KeyError, ValueError):
-        days_left = 0  # Fallback for invalid dates
-    
+        days_left = 0
     return [
         days_left,
-        task.get('urgency_score', 0),          # Direct from dataset
-        len(task.get('dependencies', [])),     # Dependency_Count
-        task.get('normalized_urgency', 0.0),   # From dataset
-        1 if task.get('status', '').lower() == 'overdue' else 0  # Status_Overdue
+        task.get('urgency_score', 0),
+        len(task.get('dependencies', [])),
+        task.get('normalized_urgency', 0.0),
+        1 if task.get('status', '').lower() == 'overdue' else 0
     ]
 
-# Add this after extract_features() but before validate_features()
+def validate_features(features: List[float]) -> bool:
+    return len(features) == 5 and all(isinstance(x, (int, float)) for x in features)
+
+# --- Decorator for feature validation ---
 def validate_task_features(func):
-    """Decorator to enforce 5 feature requirement"""
     def wrapper(task: Dict, current_time: datetime):
         features = extract_features(task, current_time)
-        if len(features) != 5:
-            raise ValueError(f"Expected 5 features, got {len(features)}")
+        if not validate_features(features):
+            raise ValueError(f"Feature mismatch. Expected 5 numerical features, got {features}")
         return func(task, current_time)
     return wrapper
 
-
-
-
-def validate_features(features: List[float]) -> bool:
-    """Ensure feature structure matches training data"""
-    return len(features) == 5 and all(isinstance(x, (int, float)) for x in features)
-
+# --- Prediction ---
 @validate_task_features
 def predict_task_priority(task: Dict, current_time: datetime) -> float:
-    """Returns probability score between 0-1 for high priority"""
     features = extract_features(task, current_time)
-    return model.predict_proba([features])[0][1] 
+    # Return probability of class 1 (high priority)
+    return float(model.predict_proba([features])[0][1])
 
 def dependencies_met(task: Dict, completed_task_ids: List[int]) -> bool:
-    """Simplified dependency check matching dataset structure"""
     return all(dep in completed_task_ids for dep in task.get('dependencies', []))
 
 def prioritize(task_list: List[Dict], completed_ids: List[int] = []) -> List[Dict]:
-    """Main prioritization logic with error handling"""
     current_time = datetime.now()
-    
     for task in task_list:
         try:
             if dependencies_met(task, completed_ids):
@@ -77,14 +67,13 @@ def prioritize(task_list: List[Dict], completed_ids: List[int] = []) -> List[Dic
         except Exception as e:
             task['score'] = -1
             task['error'] = str(e)
-    
     return sorted(
         [t for t in task_list if t['score'] >= 0],
         key=lambda x: x['score'],
         reverse=True
     )
 
-# Routes
+# --- API Routes ---
 @app.route('/')
 def home():
     return "✅ Task Prioritization API - Operational"
@@ -98,7 +87,7 @@ def handle_prioritization():
 
         tasks = data['tasks']
         completed_ids = data.get('completed_task_ids', [])
-        
+
         if not model_loaded:
             return jsonify({
                 "error": "Model not loaded - verify task_priority_model.pkl exists",
@@ -117,9 +106,9 @@ def handle_prioritization():
         prioritized = prioritize(tasks, completed_ids)
         return jsonify({
             "prioritized_tasks": prioritized,
-            "feature_set": features  # For debugging
+            "feature_set": features
         })
-    
+
     except Exception as e:
         return jsonify({
             "error": str(e),
@@ -129,3 +118,4 @@ def handle_prioritization():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
