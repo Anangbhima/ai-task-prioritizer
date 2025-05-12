@@ -1,4 +1,3 @@
-
 from datetime import datetime
 from typing import List, Dict
 import joblib
@@ -17,22 +16,30 @@ def extract_features(task: Dict, current_time: datetime) -> List[float]:
     
     return [
         days_left,
-        task.get('urgency_score', 0),  # Direct numerical value from dataset
-        len(task.get('dependencies', [])),  # Dependency_Count
-        task.get('normalized_urgency', 0.0),  # From dataset column
-        1 if task.get('status', '').lower() == 'overdue' else 0  # Status_Overdue
+        task.get('urgency_score', 0),
+        len(task.get('dependencies', [])),
+        task.get('normalized_urgency', 0.0),
+        1 if task.get('status', '').lower() == 'overdue' else 0
     ]
 
 def validate_features(features: List[float]) -> bool:
     """Ensure feature structure matches training data"""
     return len(features) == 5 and all(isinstance(x, (int, float)) for x in features)
 
+def validate_task_features(func):
+    """Decorator for feature validation"""
+    def wrapper(task: Dict, current_time: datetime):
+        features = extract_features(task, current_time)
+        if not validate_features(features):
+            raise ValueError(f"Invalid features: {features}. Expected 5 numerical values")
+        return func(task, current_time)
+    return wrapper
+
+@validate_task_features
 def predict_task_priority(task: Dict, current_time: datetime) -> float:
-    """Predict priority with feature validation"""
+    """Returns probability score between 0-1 for high priority"""
     features = extract_features(task, current_time)
-    if not validate_features(features):
-        raise ValueError(f"Invalid features: {features}. Expected 5 numerical values")
-    return model.predict([features])[0]
+    return float(model.predict_proba([features])[0][1])
 
 def dependencies_met(task: Dict, completed_task_ids: List[int]) -> bool:
     """Simplified dependency check matching dataset structure"""
@@ -43,7 +50,7 @@ def prioritize_tasks(task_list: List[Dict], completed_task_ids: List[int] = None
     current_time = datetime.now()
     completed = completed_task_ids or []
     
-    for task in task_list:
+   for task in task_list:
         try:
             if dependencies_met(task, completed):
                 task['score'] = predict_task_priority(task, current_time)
